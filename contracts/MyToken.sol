@@ -38,6 +38,8 @@ interface ERC20Interface {
 }
 
 contract MyToken is ERC20Interface {
+    event Invest(address from, uint256 value, uint256 tokens);
+
     mapping(address => uint256) public balances;
     mapping(address => mapping(address => uint256)) allowed;
 
@@ -65,6 +67,7 @@ contract MyToken is ERC20Interface {
 
     function transfer(address to, uint256 tokens)
         public
+        virtual
         override
         returns (bool success)
     {
@@ -102,7 +105,7 @@ contract MyToken is ERC20Interface {
         address from,
         address to,
         uint256 tokens
-    ) public override returns (bool success) {
+    ) public virtual override returns (bool success) {
         require(allowed[from][to] >= tokens);
         require(balances[from] >= tokens);
 
@@ -110,6 +113,112 @@ contract MyToken is ERC20Interface {
         balances[to] += tokens;
         allowed[from][to] -= tokens;
 
+        emit Transfer(from, to, tokens);
+
         return true;
+    }
+}
+
+contract MyTokenICO is MyToken {
+    address public admin;
+    address payable public deposit;
+    uint256 tokenPrice = 0.001 ether;
+    uint256 public hardCap = 300 ether;
+    uint256 public raisedAmount;
+
+    uint256 public saleStart = block.timestamp;
+    uint256 public saleEnd = block.timestamp + 604800;
+    uint256 public tokenTradeStart = saleEnd + 604800;
+
+    uint256 maxInvestment = 5 ether;
+    uint256 minInvestment = 0.1 ether;
+
+    enum State {
+        BEFORE_START,
+        RUNNING,
+        AFTER_END,
+        HALTED
+    }
+    State public icoState;
+
+    constructor(address payable _deposit) {
+        deposit = _deposit;
+        admin = msg.sender;
+        icoState = State.BEFORE_START;
+    }
+
+    modifier onlyAdmin() {
+        require(msg.sender == admin);
+        _;
+    }
+
+    function halt() public onlyAdmin {
+        icoState = State.HALTED;
+    }
+
+    function restart() public onlyAdmin {
+        icoState = State.RUNNING;
+    }
+
+    function changeDepositAddress(address payable newAddress) public onlyAdmin {
+        deposit = newAddress;
+    }
+
+    function getCurrentState() public view returns (State) {
+        if (icoState == State.HALTED) {
+            return State.HALTED;
+        } else if (block.timestamp < saleStart) {
+            return State.BEFORE_START;
+        } else if (block.timestamp >= saleStart && block.timestamp <= saleEnd) {
+            return State.RUNNING;
+        } else {
+            return State.AFTER_END;
+        }
+    }
+
+    function invest() public payable returns (bool) {
+        require(getCurrentState() == State.RUNNING);
+        require(msg.value >= minInvestment && msg.value <= maxInvestment);
+
+        raisedAmount += msg.value;
+        require(raisedAmount <= hardCap);
+
+        uint256 tokens = msg.value / tokenPrice;
+        balances[msg.sender] += tokens;
+        balances[founder] -= tokens;
+        deposit.transfer(msg.value);
+
+        emit Invest(msg.sender, msg.value, tokens);
+        return true;
+    }
+
+    function transfer(address to, uint256 tokens)
+        public
+        override
+        returns (bool success)
+    {
+        require(block.timestamp > tokenTradeStart);
+        super.transfer(to, tokens);
+        return true;
+    }
+
+    function transferFrom(
+        address from,
+        address to,
+        uint256 tokens
+    ) public override returns (bool success) {
+        require(block.timestamp > tokenTradeStart);
+        super.transferFrom(from, to, tokens);
+        return true;
+    }
+
+    function burn() public returns (bool) {
+        require(getCurrentState() == State.AFTER_END);
+        balances[founder] = 0;
+        return true;
+    }
+
+    receive() external payable {
+        invest();
     }
 }
